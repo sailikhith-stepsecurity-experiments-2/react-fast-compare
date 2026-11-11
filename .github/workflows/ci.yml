@@ -2,11 +2,24 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      secure-registry:
+        description: 'Harden-Runner secure-registry input'
+        type: choice
+        options: ['false', 'true']
+        default: 'false'
+      lockfile:
+        description: 'keep = install from yarn.lock, fresh = delete it and resolve again'
+        type: choice
+        options: [keep, fresh]
+        default: keep
+
+run-name: 'CI secure-registry=${{ inputs.secure-registry }} lockfile=${{ inputs.lockfile }}'
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   test:
@@ -20,19 +33,36 @@ jobs:
           - 18
     name: Node ${{ matrix.node_version }} on ${{ matrix.os }}
     steps:
+      - name: Harden-Runner
+        uses: sailikhith-stepsecurity/harden-runner@int/sr-ci-12.1-binding-summary
+        with:
+          egress-policy: audit
+          secure-registry: ${{ inputs.secure-registry }}
       - name: Use LF EOL
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
           git config --global core.autocrlf false
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Remove yarn.lock (fresh resolve)
+        if: inputs.lockfile == 'fresh'
+        shell: bash
+        run: rm -f yarn.lock
       - name: Setup node
         uses: actions/setup-node@v4
         with:
-          cache: "yarn"
           node-version: ${{ matrix.node_version }}
       - name: Install Dependencies
-        run: yarn install --frozen-lockfile
+        shell: bash
+        run: |
+          yarn --version
+          yarn config get registry
+          npm config get registry
+          if [ "${{ inputs.lockfile }}" = fresh ]; then yarn install; else yarn install --frozen-lockfile; fi
+      - name: Resolved hosts in yarn.lock
+        shell: bash
+        run: |
+          grep -o 'resolved "https://[^/]*' yarn.lock | sort | uniq -c || true
       - name: Test
         run: yarn test
       - name: Codecov
